@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>GitHub Snake: Professional Layout</title>
+    <style>
+        body { 
+            background: #040506; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            height: 100vh; 
+            margin: 0; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        }
+        .container { 
+            padding: 25px; 
+            background: #0d1117; 
+            border: 1px solid #30363d; 
+            border-radius: 6px; 
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+        }
+        canvas { display: block; }
+        .footer { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            margin-top: 12px; 
+            color: #7d8590; 
+            font-size: 11px; 
+        }
+        .legend { display: flex; align-items: center; gap: 4px; }
+        .l-box { width: 10px; height: 10px; border-radius: 2px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <canvas id="snakeCanvas"></canvas>
+        <div class="footer">
+            <div style="font-size: 9px; opacity: 0.6; letter-spacing: 1px; font-weight: 600;">SENSORY RADAR: CALIBRATED</div>
+            <div class="legend">
+                <span>Less</span>
+                <div class="l-box" style="background: #161b22;"></div>
+                <div class="l-box" style="background: #0e4429;"></div>
+                <div class="l-box" style="background: #006d32;"></div>
+                <div class="l-box" style="background: #26a641;"></div>
+                <div class="l-box" style="background: #39d353;"></div>
+                <span>More</span>
+            </div>
+        </div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('snakeCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // GitHub 风格配置
+    const ROWS = 7, COLS = 53;
+    const SIZE = 10; 
+    const GAP = 3;  
+    const MARGIN_LEFT = 32; 
+    const GRID_TOP = 30;    
+    const STEP_MS = 180; // 稍微加快速度，手感更好
+    const PAUSE_MS = 1000; 
+
+    canvas.width = COLS * (SIZE + GAP) + GAP + MARGIN_LEFT;
+    canvas.height = ROWS * (SIZE + GAP) + GAP + GRID_TOP + 5;
+
+    let snake, dots, currentNext, startTime, state, cooldownStart;
+    const COLORS = { 
+        bg: '#161b22', 
+        dot: '#39d353', 
+        snake: '#F5F5DC', 
+        text: '#7d8590' 
+    };
+
+    const MONTHS = [
+        { name: "Jan", col: 0 }, { name: "Feb", col: 5 }, { name: "Mar", col: 9 },
+        { name: "Apr", col: 13 }, { name: "May", col: 18 }, { name: "Jun", col: 22 },
+        { name: "Jul", col: 27 }, { name: "Aug", col: 31 }, { name: "Sep", col: 36 },
+        { name: "Oct", col: 40 }, { name: "Nov", col: 44 }, { name: "Dec", col: 49 }
+    ];
+
+    function resetGame() {
+        // 初始位置在上方隐藏区域
+        snake = [{x: 3, y: -1}, {x: 2, y: -1}, {x: 1, y: -1}, {x: 0, y: -1}];
+        spawnDots();
+        currentNext = {x: 3, y: 0}; 
+        state = "COOLDOWN";
+        cooldownStart = performance.now();
+    }
+
+    function spawnDots() {
+        dots = Array.from({length: 12}, () => ({
+            x: Math.floor(Math.random() * (COLS - 4)) + 2, 
+            y: Math.floor(Math.random() * ROWS)
+        }));
+    }
+
+    function drawLabels() {
+        ctx.fillStyle = COLORS.text;
+        ctx.font = "10px -apple-system, sans-serif";
+        MONTHS.forEach(m => {
+            const x = MARGIN_LEFT + m.col * (SIZE + GAP);
+            ctx.fillText(m.name, x, GRID_TOP - 12);
+        });
+        const days = [{n: "Mon", r: 1}, {n: "Wed", r: 3}, {n: "Fri", r: 5}];
+        days.forEach(d => {
+            const y = GRID_TOP + d.r * (SIZE + GAP) + SIZE - 1;
+            ctx.fillText(d.n, 4, y);
+        });
+    }
+
+    function drawBox(x, y, color, isSnake = false, shrink = 0) {
+        let finalSize = isSnake ? SIZE * 1.05 * (1 - shrink) : SIZE;
+        const offset = (SIZE - finalSize) / 2;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        const rx = MARGIN_LEFT + x * (SIZE + GAP) + GAP + offset;
+        const ry = GRID_TOP + y * (SIZE + GAP) + GAP + offset;
+        // 使用圆角增强质感
+        ctx.roundRect(rx, ry, finalSize, finalSize, isSnake ? 3 : 2);
+        ctx.fill();
+    }
+
+    function getNextTarget() {
+        const head = snake[0];
+
+        if (state === "HUNTING") {
+            if (dots.length === 0) {
+                state = "RETURNING";
+                return getNextTarget();
+            }
+            // 锁定最近的点
+            let target = dots[0];
+            let minD = Infinity;
+            dots.forEach(d => {
+                let dist = Math.abs(d.x - head.x) + Math.abs(d.y - head.y);
+                if (dist < minD) { minD = dist; target = d; }
+            });
+            
+            // 计算可行方向，过滤掉自身身体（防止回头）
+            const ops = [
+                {x: head.x + 1, y: head.y}, {x: head.x - 1, y: head.y}, 
+                {x: head.x, y: head.y + 1}, {x: head.x, y: head.y - 1}
+            ].filter(n => {
+                const isBody = snake.some(seg => seg.x === n.x && seg.y === n.y);
+                return n.x >= 0 && n.x < COLS && n.y >= 0 && n.y < ROWS && !isBody;
+            });
+
+            // 排序：选择距离目标最近的方向
+            ops.sort((a,b) => (Math.abs(a.x-target.x)+Math.abs(a.y-target.y)) - (Math.abs(b.x-target.x)+Math.abs(b.y-target.y)));
+            return ops[0] || {x: head.x, y: head.y}; // 如果无路可走则原地等待
+        }
+
+        if (state === "RETURNING") {
+            if (head.y === -1) {
+                if (head.x < 3) return {x: head.x + 1, y: -1};
+                // 回到起始状态
+                state = "COOLDOWN";
+                cooldownStart = performance.now();
+                spawnDots();
+                return {x: 3, y: 0}; 
+            }
+            if (head.x > 0) return {x: head.x - 1, y: head.y};
+            return {x: 0, y: head.y - 1};
+        }
+        return currentNext;
+    }
+
+    function render(progress) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawLabels();
+        
+        // 1. 绘制背景网格
+        for (let x = 0; x < COLS; x++) {
+            for (let y = 0; y < ROWS; y++) drawBox(x, y, COLORS.bg);
+        }
+        
+        // 2. 绘制目标点 (只绘制还没被“逻辑删除”的点)
+        dots.forEach(d => drawBox(d.x, d.y, COLORS.dot));
+
+        // 3. 绘制蛇身 (增加平滑插值动画)
+        for (let i = 0; i < snake.length; i++) {
+            const cur = snake[i];
+            const prev = (i === 0) ? currentNext : snake[i - 1];
+            
+            // 如果在冷却期，progress 保持为 0，不移动
+            let p = (state === "COOLDOWN") ? 0 : progress; 
+            const renderX = cur.x + (prev.x - cur.x) * p;
+            const renderY = cur.y + (prev.y - cur.y) * p;
+            
+            drawBox(renderX, renderY, COLORS.snake, true, i * 0.1);
+        }
+    }
+
+    function animate(now) {
+        if (state === "COOLDOWN") {
+            if (now - cooldownStart >= PAUSE_MS) {
+                state = "HUNTING";
+                startTime = now;
+            }
+            render(0);
+            requestAnimationFrame(animate);
+            return;
+        }
+
+        // 逻辑更新步长
+        if (now - startTime >= STEP_MS) {
+            // 确认移动
+            snake.unshift({...currentNext});
+            snake.pop();
+
+            // 碰撞检测：蛇头刚好到达点位时，删除该点
+            const hitIdx = dots.findIndex(d => d.x === snake[0].x && d.y === snake[0].y);
+            if (hitIdx !== -1) {
+                dots.splice(hitIdx, 1);
+            }
+
+            // 寻找下一个目标点
+            currentNext = getNextTarget();
+            startTime = now;
+        }
+
+        // 计算当前帧的平滑进度
+        const progress = Math.min((now - startTime) / STEP_MS, 1);
+        render(progress);
+        requestAnimationFrame(animate);
+    }
+
+    resetGame();
+    requestAnimationFrame(animate);
+</script>
+</body>
+</html>
